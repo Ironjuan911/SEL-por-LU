@@ -4,7 +4,7 @@ Este manual describe el paso a paso para utilizar el programa y explica de forma
 
 ---
 
-## 🚀 Guía de Uso (Paso a Paso)
+## Guía de Uso (Paso a Paso)
 
 ### 1. Preparación y Ejecución
 
@@ -49,7 +49,7 @@ Al abrir el programa, verás la ventana principal que presenta en la zona media 
 
 ---
 
-## ⚙️ Funcionamiento Interno del Programa
+## Funcionamiento Interno del Programa
 
 La aplicación está dividida en dos grandes componentes arquitectónicos: la interfaz gráfica o Frontend web incrustado (`app.py`), y el núcleo matemático de procesamiento o Backend (`lu_solver.py`).
 
