@@ -1,645 +1,829 @@
 """
 app.py  –  Resolución de SEL por Descomposición LU
-Aplicación de escritorio PyQt6 con interfaz HTML/CSS/JS embebida.
+Interfaz de escritorio con CustomTkinter + matplotlib para LaTeX.
 Ejecutar: python app.py
 """
 
+import threading
+import io
+import re
 import sys
-import json
 
-from PyQt6.QtWidgets import QApplication, QMainWindow
-from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebChannel import QWebChannel
-from PyQt6.QtCore import QObject, pyqtSlot, QFile, QIODevice, QUrl
+import customtkinter as ctk
+from PIL import Image
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.figure as mfig
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 import lu_solver
 
+# ─────────────────────────── Paleta de colores ────────────────────────────────
 
-# ──────────────────────────── Bridge Python ↔ JS ────────────────────────────
+BG       = "#07091a"
+SURFACE  = "#0f1127"
+SURFACE2 = "#141730"
+BORDER   = "#1e2245"
+P1       = "#7c6bff"
+P2       = "#00d4ff"
+WARN     = "#f59e0b"
+OK       = "#4ade80"
+ERR      = "#f87171"
+TXT      = "#e2e8f0"
+MUTED    = "#64748b"
 
-class Bridge(QObject):
-    """Objeto expuesto al JS a través de QWebChannel."""
-
-    @pyqtSlot(str)
-    def copyToClipboard(self, text):
-        clipboard = QApplication.clipboard()
-        clipboard.setText(text)
-
-    @pyqtSlot(str, result=str)
-    def solve(self, data_json: str) -> str:
-        try:
-            data = json.loads(data_json)
-            result = lu_solver.solve(data["A"], data["b"])
-            return json.dumps(result, ensure_ascii=False)
-        except Exception as exc:
-            return json.dumps({"error": str(exc)}, ensure_ascii=False)
-
-
-# ──────────────────────── Cargar qwebchannel.js desde Qt ────────────────────
-
-def _load_qwc_js() -> str:
-    path = ":/qtwebchannel/qwebchannel.js"
-    f = QFile(path)
-    if f.open(QIODevice.OpenModeFlag.ReadOnly):
-        content = bytes(f.readAll()).decode("utf-8")
-        f.close()
-        return content
-    return "console.error('qwebchannel.js no encontrado');"
-
-
-# ────────────────────────────── HTML de la app ──────────────────────────────
-
-_HTML = r"""<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<title>SEL — Descomposición LU</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<script>
-MathJax = {
-  tex: { inlineMath:[['$','$']], displayMath:[['\\[','\\]']], processEscapes:true },
-  svg: { fontCache:'global' },
-  startup: { typeset: false }
-};
-</script>
-<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
-<script>
-%%QWEBCHANNEL%%
-</script>
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#07091a;--surface:rgba(255,255,255,.045);--border:rgba(255,255,255,.09);
-  --p1:#7c6bff;--p2:#00d4ff;--warn:#f59e0b;--ok:#4ade80;--err:#f87171;
-  --txt:#e2e8f0;--muted:#64748b;--radius:14px;
-}
-html{font-family:'Inter',sans-serif;font-size:15px;background:var(--bg);color:var(--txt);scroll-behavior:smooth}
-body{min-height:100vh;padding-bottom:60px}
-
-/* ── Header ── */
-.app-header{
-  background:linear-gradient(135deg,#0d0f2b 0%,#13183a 100%);
-  border-bottom:1px solid var(--border);padding:22px 40px;
-  display:flex;align-items:center;gap:18px;
-}
-.header-icon{
-  width:52px;height:52px;border-radius:14px;font-size:26px;
-  background:linear-gradient(135deg,var(--p1),var(--p2));
-  display:grid;place-items:center;flex-shrink:0;
-}
-.app-header h1{font-size:1.45rem;font-weight:700;
-  background:linear-gradient(90deg,var(--p1),var(--p2));
-  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.app-header p{font-size:.82rem;color:var(--muted);margin-top:2px}
-
-/* ── Sections ── */
-.container{max-width:1100px;margin:0 auto;padding:30px 24px}
-.card{
-  background:var(--surface);border:1px solid var(--border);
-  border-radius:var(--radius);padding:28px;margin-bottom:22px;
-  backdrop-filter:blur(12px);
-}
-.card h2{font-size:1rem;font-weight:600;color:var(--p2);margin-bottom:18px;
-  display:flex;align-items:center;gap:8px}
-
-/* ── Size selector ── */
-.size-row{display:flex;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
-.size-row label{font-size:.88rem;color:var(--muted);font-weight:500}
-.size-btn{
-  width:38px;height:38px;border-radius:8px;border:1px solid var(--border);
-  background:transparent;color:var(--txt);font-size:.9rem;font-weight:600;
-  cursor:pointer;transition:all .2s;
-}
-.size-btn:hover{border-color:var(--p1);color:var(--p1)}
-.size-btn.active{background:var(--p1);border-color:var(--p1);color:#fff}
-
-/* ── Matrix grid ── */
-.matrix-area{display:flex;align-items:center;gap:4px;overflow-x:auto;padding:4px 0}
-.bracket{font-size:3rem;color:var(--p2);font-weight:200;line-height:1;user-select:none;opacity:.7}
-.sep-line{width:2px;background:var(--border);align-self:stretch;margin:0 6px}
-.matrix-grid{display:grid;gap:7px}
-.cell{
-  width:62px;height:44px;background:rgba(255,255,255,.06);
-  border:1px solid var(--border);border-radius:8px;
-  color:var(--txt);font-size:.9rem;font-family:'Inter',sans-serif;
-  text-align:center;outline:none;transition:border-color .2s;
-}
-.cell:focus{border-color:var(--p1);background:rgba(124,107,255,.12)}
-.cell.b-cell{border-color:rgba(0,212,255,.25);background:rgba(0,212,255,.06)}
-.cell.b-cell:focus{border-color:var(--p2)}
-.col-label{
-  font-size:.72rem;color:var(--muted);text-align:center;
-  font-weight:600;letter-spacing:.04em;
-}
-.col-label.b-label{color:var(--p2)}
-
-/* ── Buttons ── */
-.btn-row{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap}
-.btn{
-  padding:11px 28px;border-radius:10px;font-size:.9rem;font-weight:600;
-  cursor:pointer;border:none;transition:all .2s;font-family:'Inter',sans-serif;
-}
-.btn-primary{
-  background:linear-gradient(135deg,var(--p1),var(--p2));color:#fff;
-}
-.btn-primary:hover{opacity:.88;transform:translateY(-1px)}
-.btn-secondary{
-  background:transparent;border:1px solid var(--border);color:var(--txt);
-}
-.btn-secondary:hover{border-color:var(--p1);color:var(--p1)}
-
-/* ── Solution banner ── */
-#solution-banner{display:none}
-.solution-banner{
-  background:linear-gradient(135deg,rgba(74,222,128,.12),rgba(0,212,255,.08));
-  border:1px solid rgba(74,222,128,.3);border-radius:var(--radius);
-  padding:24px 28px;margin-bottom:22px;text-align:center;
-}
-.solution-banner h3{color:var(--ok);font-size:.88rem;font-weight:600;margin-bottom:10px}
-.solution-math{font-size:1.05rem;min-height:40px}
-
-/* ── Steps area ── */
-.steps-toggle{
-  background:transparent;border:1px solid var(--border);border-radius:10px;
-  color:var(--muted);font-size:.85rem;padding:8px 16px;cursor:pointer;
-  font-family:'Inter',sans-serif;transition:all .2s;margin-bottom:16px;
-}
-.steps-toggle:hover{border-color:var(--p1);color:var(--p1)}
-.step-card{
-  border-radius:12px;padding:20px 22px;margin-bottom:12px;
-  border-left:4px solid var(--border);
-  animation:fadeUp .4s ease both;
-  transition:box-shadow .2s;
-}
-.step-card:hover{box-shadow:0 4px 20px rgba(0,0,0,.3)}
-@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-
-.step-title{font-size:.88rem;font-weight:600;margin-bottom:10px;color:var(--txt)}
-.step-math{text-align:center;padding:10px 0;font-size:.95rem;overflow-x:auto}
-.matrices-row{display:flex;flex-wrap:wrap;gap:18px;margin-top:14px;justify-content:center}
-.mat-block{text-align:center}
-.mat-label{font-size:.72rem;color:var(--muted);font-weight:600;letter-spacing:.08em;margin-bottom:6px}
-.mat-math{font-size:.82rem;overflow-x:auto}
-
-/* step type colors */
-.type-system   {background:rgba(0,212,255,.07);  border-left-color:#00d4ff}
-.type-phase    {background:rgba(124,107,255,.1);  border-left-color:var(--p1);padding:16px 22px}
-.type-pivot    {background:rgba(245,158,11,.07); border-left-color:var(--warn)}
-.type-elim     {background:rgba(167,139,250,.07);border-left-color:#a78bfa}
-.type-lures    {background:rgba(74,222,128,.08); border-left-color:var(--ok)}
-.type-fstep    {background:rgba(56,189,248,.07); border-left-color:#38bdf8}
-.type-fres     {background:rgba(20,184,166,.07); border-left-color:#14b8a6}
-.type-bstep    {background:rgba(251,113,133,.07);border-left-color:#fb7185}
-.type-solution {background:rgba(251,191,36,.09); border-left-color:#fbbf24;padding:22px 26px}
-.type-error    {background:rgba(248,113,113,.09);border-left-color:var(--err)}
-
-.phase-title{font-size:1rem;font-weight:700;color:var(--p1)}
-.sol-title{font-size:1.05rem;font-weight:700;color:#fbbf24}
-.sol-math{font-size:1.15rem}
-
-/* loader */
-#loader{display:none;text-align:center;padding:30px;color:var(--muted)}
-.spinner{width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--p1);
-  border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 10px}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-    /* toast */
-    #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,0.1);
-      border:1px solid var(--p1);padding:12px 24px;border-radius:12px;backdrop-filter:blur(10px);
-      z-index:2000;opacity:0;transition:opacity .3s;pointer-events:none;color:white;font-weight:500}
-    #toast.show{opacity:1}
-  </style>
-</head>
-<body>
-
-<header class="app-header">
-  <div class="header-icon">Σ</div>
-  <div>
-    <h1>Resolución de SEL — Descomposición LU</h1>
-    <p>Método de Doolittle con pivoteo parcial &nbsp;·&nbsp; Paso a paso con LaTeX</p>
-  </div>
-</header>
-
-<div class="container">
-
-  <!-- Input card -->
-  <div class="card">
-    <h2>Sistema de ecuaciones</h2>
-    <div class="size-row">
-      <label>Tamaño del sistema:</label>
-      <div id="size-buttons"></div>
-    </div>
-    <div class="matrix-area" id="matrix-area"></div>
-    <div id="input-error"></div>
-    <div class="btn-row">
-      <button class="btn btn-primary" onclick="solveSystem()">Resolver →</button>
-      <button class="btn btn-secondary" onclick="copyLatex()">Copiar LaTeX</button>
-      <button class="btn btn-secondary" onclick="clearMatrix()">Limpiar</button>
-      <button class="btn btn-secondary" onclick="loadExample()">Ejemplo 4×4</button>
-    </div>
-  </div>
-
-  <!-- Solution banner -->
-  <div id="solution-banner" class="solution-banner">
-    <h3>✓ SOLUCIÓN ENCONTRADA</h3>
-    <div class="solution-math" id="solution-math"></div>
-  </div>
-
-  <!-- Loader -->
-  <div id="loader"><div class="spinner"></div><p>Calculando…</p></div>
-
-  <!-- Steps -->
-  <div id="steps-section" style="display:none">
-    <button class="steps-toggle" onclick="toggleAllSteps()">▼ Colapsar todos los pasos</button>
-    <div id="steps-container"></div>
-  </div>
-
-</div>
-<div id="toast">¡Copiado!</div>
-
-<script>
-// ─── Estado ──────────────────────────────────────────────────────────────────
-let currentN = 4;
-let bridge = null;
-let stepsCollapsed = false;
-
-// ─── Inicializar QWebChannel ──────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  buildSizeButtons();
-  generateGrid(currentN);
-  new QWebChannel(qt.webChannelTransport, ch => {
-    bridge = ch.objects.bridge;
-  });
-});
-
-// ─── Botones de tamaño ────────────────────────────────────────────────────────
-function buildSizeButtons() {
-  const c = document.getElementById('size-buttons');
-  c.innerHTML = '';
-  for (let n = 2; n <= 8; n++) {
-    const b = document.createElement('button');
-    b.className = 'size-btn' + (n === currentN ? ' active' : '');
-    b.textContent = n + '×' + n;
-    b.onclick = () => { currentN = n; buildSizeButtons(); generateGrid(n); resetResults(); };
-    c.appendChild(b);
-  }
+# Color de tarjeta por tipo de paso
+STEP_COLORS = {
+    "system":         (SURFACE2, P2),
+    "phase_header":   (SURFACE,  P1),
+    "pivot":          (SURFACE2, WARN),
+    "elimination":    (SURFACE2, "#a78bfa"),
+    "lu_result":      (SURFACE2, OK),
+    "forward_step":   (SURFACE2, "#38bdf8"),
+    "forward_result": (SURFACE2, "#14b8a6"),
+    "backward_step":  (SURFACE2, "#fb7185"),
+    "solution":       (SURFACE2, "#fbbf24"),
+    "error":          (SURFACE2, ERR),
 }
 
-// ─── Generar grid de entrada ──────────────────────────────────────────────────
-function generateGrid(n) {
-  const area = document.getElementById('matrix-area');
-  area.innerHTML = '';
 
-  // bracket left
-  const bl = document.createElement('span');
-  bl.className = 'bracket'; bl.textContent = '[';
-  area.appendChild(bl);
+# ─────────────────────────── Helper: LaTeX → imagen ──────────────────────────
 
-  const wrapper = document.createElement('div');
-  const cols = n + 1; // n cols for A, 1 for b
-  wrapper.style.display = 'grid';
-  wrapper.style.gridTemplateColumns = `repeat(${n}, 1fr) 2px repeat(1, 1fr)`;
-  wrapper.style.gap = '7px';
-  wrapper.style.alignItems = 'center';
+def _sanitize_latex(s: str) -> str:
+    r"""
+    Convierte LaTeX con \text{...} a formato compatible con matplotlib (inline math).
+    Ejemplo: "\text{Hola } x=1" -> "Hola $x=1$"
+    """
+    # 1. Quitar símbolos de $ residuales
+    s = s.replace("$", "")
+    
+    # 2. Reemplazos de conveniencia
+    s = s.replace(r"\qquad", r" \quad ").replace(r"\quad", r" \; ")
+    s = s.replace(r"\mathrm{\_}", r"\cdot").replace(r"\text{\_}", r"\cdot").replace(r"\_", r"\cdot")
 
-  // Column labels row
-  for (let j = 0; j < n; j++) {
-    const lbl = document.createElement('div');
-    lbl.className = 'col-label';
-    lbl.textContent = 'x' + (j + 1);
-    wrapper.appendChild(lbl);
-  }
-  // separator label
-  const sepLbl = document.createElement('div'); wrapper.appendChild(sepLbl);
-  const bLbl = document.createElement('div');
-  bLbl.className = 'col-label b-label'; bLbl.textContent = 'b';
-  wrapper.appendChild(bLbl);
-
-  // Data rows
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      const inp = document.createElement('input');
-      inp.type = 'number'; inp.step = 'any';
-      inp.className = 'cell'; inp.id = `c${i}_${j}`;
-      inp.onkeydown = (e) => handleMatrixKey(e, i, j);
-      wrapper.appendChild(inp);
-    }
-    // separator
-    const sep = document.createElement('div');
-    sep.style.cssText = 'background:rgba(255,255,255,.12);width:2px;height:100%;border-radius:2px';
-    wrapper.appendChild(sep);
-    // b input
-    const bInp = document.createElement('input');
-    bInp.type = 'number'; bInp.step = 'any';
-    bInp.className = 'cell b-cell'; bInp.id = `c${i}_b`;
-    bInp.onkeydown = (e) => handleMatrixKey(e, i, 'b');
-    wrapper.appendChild(bInp);
-  }
-
-  area.appendChild(wrapper);
-  const br = document.createElement('span');
-  br.className = 'bracket'; br.textContent = ']';
-  area.appendChild(br);
-}
-
-// ─── Manejo de navegación con Enter ───────────────────────────────────────────
-function handleMatrixKey(e, i, j) {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    const n = currentN;
-    let next = null;
-
-    if (j === 'b') {
-      if (i < n - 1) next = document.getElementById(`c${i+1}_0`);
-      else solveSystem(); // Última celda -> Resolver
-    } else {
-      if (j < n - 1) next = document.getElementById(`c${i}_${j+1}`);
-      else next = document.getElementById(`c${i}_b`);
-    }
-
-    if (next) {
-      next.focus();
-      next.select();
-    }
-  }
-}
-
-// ─── Leer datos del grid ─────────────────────────────────────────────────────
-function readMatrix() {
-  const n = currentN;
-  const A = [], b = [];
-  for (let i = 0; i < n; i++) {
-    const row = [];
-    for (let j = 0; j < n; j++) {
-      const v = parseFloat(document.getElementById(`c${i}_${j}`).value);
-      if (isNaN(v)) return null;
-      row.push(v);
-    }
-    A.push(row);
-    const bv = parseFloat(document.getElementById(`c${i}_b`).value);
-    if (isNaN(bv)) return null;
-    b.push(bv);
-  }
-  return { A, b };
-}
-
-// ─── Limpiar ─────────────────────────────────────────────────────────────────
-function clearMatrix() {
-  for (let i = 0; i < currentN; i++) {
-    for (let j = 0; j < currentN; j++) document.getElementById(`c${i}_${j}`).value = '';
-    document.getElementById(`c${i}_b`).value = '';
-  }
-  resetResults();
-}
-
-// ─── Ejemplo 4×4 ─────────────────────────────────────────────────────────────
-function loadExample() {
-  const n4 = [[2,-1,0,3],[4,1,-1,2],[-2,3,2,0],[0,2,-1,1]];
-  const b4 = [7,9,3,2];
-
-  // Switch to 4×4 if needed
-  if (currentN !== 4) { currentN = 4; buildSizeButtons(); generateGrid(4); resetResults(); }
-
-  setTimeout(() => {
-    for (let i = 0; i < 4; i++) {
-      for (let j = 0; j < 4; j++) document.getElementById(`c${i}_${j}`).value = n4[i][j];
-      document.getElementById(`c${i}_b`).value = b4[i];
-    }
-  }, 50);
-}
-
-// ─── Resolver ─────────────────────────────────────────────────────────────────
-function solveSystem() {
-  document.getElementById('input-error').innerHTML = '';
-  const data = readMatrix();
-  if (!data) {
-    document.getElementById('input-error').innerHTML =
-      '<div class="msg-error">⚠ Completa todas las celdas con valores numéricos.</div>';
-    return;
-  }
-  if (!bridge) {
-    document.getElementById('input-error').innerHTML =
-      '<div class="msg-error">⚠ Conexión con el backend no establecida. Espera un momento y vuelve a intentarlo.</div>';
-    return;
-  }
-  showLoader(true);
-  resetResults();
-  bridge.solve(JSON.stringify(data), resultJson => {
-    showLoader(false);
-    const result = JSON.parse(resultJson);
-    if (result.error) {
-      document.getElementById('input-error').innerHTML =
-        `<div class="msg-error">Error: ${result.error}</div>`;
-      return;
-    }
-    renderResults(result);
-  });
-}
-
-// ─── Copiar a LaTeX ──────────────────────────────────────────────────────────
-function copyLatex() {
-  const n = currentN;
-  
-  // — Formato Matricial —
-  let Alatex = '\\begin{pmatrix}\n';
-  for (let i = 0; i < n; i++) {
-    let row = [];
-    for (let j = 0; j < n; j++) {
-      const val = document.getElementById(`c${i}_${j}`).value || '0';
-      row.push(val);
-    }
-    Alatex += '  ' + row.join(' & ') + ' \\\\\n';
-  }
-  Alatex += '\\end{pmatrix}';
-  
-  let blatex = '\\begin{pmatrix}\n';
-  for (let i = 0; i < n; i++) {
-    const val = document.getElementById(`c${i}_b`).value || '0';
-    blatex += `  ${val} \\\\\n`;
-  }
-  blatex += '\\end{pmatrix}';
-
-  // — Formato de Sistema de Ecuaciones (SLE) —
-  let sleLatex = '\\begin{cases}\n';
-  const vars = n <= 4 ? ['x', 'y', 'z', 'w'] : Array.from({length:n}, (_,k) => `x_{${k+1}}`);
-  
-  for (let i = 0; i < n; i++) {
-    let rowEq = [];
-    let hasTerms = false;
-    for (let j = 0; j < n; j++) {
-      let raw = document.getElementById(`c${i}_${j}`).value || '0';
-      let val = parseFloat(raw);
-      if (val === 0) continue;
-      
-      let term = '';
-      if (val === 1) term = vars[j];
-      else if (val === -1) term = `-${vars[j]}`;
-      else term = `${raw}${vars[j]}`;
-      
-      if (hasTerms && val > 0) term = `+ ${term}`;
-      else if (hasTerms && val < 0) term = ` ${term}`; // El signo ya está en el término
-      
-      rowEq.push(term);
-      hasTerms = true;
-    }
-    const bVal = document.getElementById(`c${i}_b`).value || '0';
-    sleLatex += `  ${hasTerms ? rowEq.join(' ') : '0'} = ${bVal} \\\\\n`;
-  }
-  sleLatex += '\\end{cases}';
-
-  const fullLatex = `% Modo Matricial\nA = ${Alatex}\n\nb = ${blatex}\n\n% Modo Sistema de Ecuaciones\n${sleLatex}`;
-  
-  if (bridge) {
-    bridge.copyToClipboard(fullLatex);
-    showToast('¡Matrices y SLE copiados!');
-  } else {
-    console.error('Bridge no disponible');
-  }
-}
-
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2000);
-}
-
-// ─── Reset resultados ─────────────────────────────────────────────────────────
-function resetResults() {
-  document.getElementById('solution-banner').style.display = 'none';
-  document.getElementById('steps-section').style.display = 'none';
-  document.getElementById('steps-container').innerHTML = '';
-}
-
-// ─── Loader ───────────────────────────────────────────────────────────────────
-function showLoader(on) {
-  document.getElementById('loader').style.display = on ? 'block' : 'none';
-}
-
-// ─── Toggle colapsar pasos ────────────────────────────────────────────────────
-function toggleAllSteps() {
-  stepsCollapsed = !stepsCollapsed;
-  document.querySelectorAll('.step-math, .matrices-row').forEach(el => {
-    el.style.display = stepsCollapsed ? 'none' : '';
-  });
-  document.querySelector('.steps-toggle').textContent =
-    stepsCollapsed ? '▶ Expandir todos los pasos' : '▼ Colapsar todos los pasos';
-}
-
-// ─── Renderizar resultados ────────────────────────────────────────────────────
-async function renderResults(result) {
-  // Solution banner
-  const banner = document.getElementById('solution-banner');
-  const mathDiv = document.getElementById('solution-math');
-  mathDiv.innerHTML = `\\[x = ${result.x_latex}\\]`;
-  banner.style.display = 'block';
-
-  // Steps
-  const stepsSection = document.getElementById('steps-section');
-  const container = document.getElementById('steps-container');
-  container.innerHTML = '';
-  stepsSection.style.display = 'block';
-
-  const typeClass = {
-    system:'type-system', phase_header:'type-phase',
-    pivot:'type-pivot', elimination:'type-elim', lu_result:'type-lures',
-    forward_step:'type-fstep', forward_result:'type-fres',
-    backward_step:'type-bstep', solution:'type-solution', error:'type-error'
-  };
-
-  for (let idx = 0; idx < result.steps.length; idx++) {
-    const step = result.steps[idx];
-    const card = document.createElement('div');
-    const cls = typeClass[step.type] || 'type-system';
-    card.className = `step-card ${cls}`;
-    card.style.animationDelay = `${idx * 40}ms`;
-
-    const isSolution = step.type === 'solution';
-    const isPhase = step.type === 'phase_header';
-
-    // Title
-    const titleDiv = document.createElement('div');
-    titleDiv.className = isSolution ? 'step-title sol-title' : (isPhase ? 'step-title phase-title' : 'step-title');
-    titleDiv.innerHTML = step.title;
-    card.appendChild(titleDiv);
-
-    // Main latex
-    if (step.latex) {
-      const mathDiv2 = document.createElement('div');
-      mathDiv2.className = 'step-math' + (isSolution ? ' sol-math' : '');
-      mathDiv2.innerHTML = `\\[${step.latex}\\]`;
-      card.appendChild(mathDiv2);
-    }
-
-    // Side-by-side matrices (L, U, P when show_matrices)
-    if (step.show_matrices) {
-      const row = document.createElement('div');
-      row.className = 'matrices-row';
-      const mats = [
-        { key:'L_latex', label:'L' },
-        { key:'U_latex', label:'U' },
-        { key:'P_latex', label:'P' },
-      ];
-      for (const { key, label } of mats) {
-        if (step[key]) {
-          const blk = document.createElement('div');
-          blk.className = 'mat-block';
-          blk.innerHTML =
-            `<div class="mat-label">${label}</div>`+
-            `<div class="mat-math">\\[${step[key]}\\]</div>`;
-          row.appendChild(blk);
-        }
-      }
-      card.appendChild(row);
-    }
-
-    container.appendChild(card);
-  }
-
-  // Typeset all MathJax at once
-  if (window.MathJax) {
-    await MathJax.typesetPromise([
-      document.getElementById('solution-math'),
-      container
-    ]);
-  }
-}
-</script>
-</body>
-</html>
-"""
+    # 3. Procesar \text{...}
+    parts = []
+    last_pos = 0
+    # Buscar \text{...} o \mathrm{...} (tratamos ambos como texto plano para mathtext si tienen espacios)
+    for m in re.finditer(r"\\(?:text|mathrm)\{([^}]*)\}", s):
+        # El bloque antes del comando es math
+        math_part = s[last_pos:m.start()].strip()
+        if math_part:
+            # Eliminar comas residuales al inicio/fin del math part
+            math_part = re.sub(r"^[,;\\;]+|[,;\\;]+$", "", math_part).strip()
+            if math_part:
+                parts.append(f"${math_part}$")
+        
+        # El contenido del comando es texto plano
+        text_content = m.group(1)
+        parts.append(text_content)
+        
+        last_pos = m.end()
+    
+    # El resto final es math
+    remaining = s[last_pos:].strip()
+    if remaining:
+        remaining = re.sub(r"^[,;\\;]+|[,;\\;]+$", "", remaining).strip()
+        if remaining:
+            if not parts:
+                return f"${remaining}$"
+            parts.append(f"${remaining}$")
+    
+    if not parts:
+        return ""
+        
+    return " ".join(parts)
 
 
-# ─────────────────────────────── MainWindow ──────────────────────────────────
+# ── Segmentado: separa mathtext puro de entornos \begin{bmatrix} ─────────────
 
-class MainWindow(QMainWindow):
+_BMATRIX_RE = re.compile(r"\\begin\{bmatrix\}(.*?)\\end\{bmatrix\}", re.DOTALL)
+
+
+def _split_segments(latex: str) -> list:
+    """
+    Divide una cadena LaTeX en segmentos alternados:
+      ('text',   str)        → fragmento de mathtext puro
+      ('matrix', list[list]) → filas/columnas de una bmatrix
+    """
+    segs = []
+    last = 0
+    for m in _BMATRIX_RE.finditer(latex):
+        if m.start() > last:
+            segs.append(("text", latex[last:m.start()]))
+        
+        # Procesar contenido de la matriz
+        rows = []
+        # Dividir por \\ o \cr
+        raw_rows = re.split(r"\\\\|\\cr", m.group(1))
+        for row_s in raw_rows:
+            row_s = row_s.strip()
+            if row_s:
+                # Dividir por &
+                rows.append([c.strip() for c in row_s.split("&") if c.strip()])
+        
+        if rows:
+            segs.append(("matrix", rows))
+        last = m.end()
+        
+    if last < len(latex):
+        segs.append(("text", latex[last:]))
+    return segs
+
+
+# ── Render: fragmento mathtext puro ──────────────────────────────────────────
+
+def _render_mathtext(s: str, fg: str, fontsize: float, dpi: int) -> Image.Image | None:
+    """Renderiza un fragmento (ya sea math puro, texto mixto o sanitizado) a PIL."""
+    s = s.strip()
+    if not s:
+        return None
+    
+    # Si no tiene $, asumimos que es math puro y lo envolvemos
+    if "$" not in s:
+        s = f"${s}$"
+    
+    try:
+        # Usamos una figura grande para la medición inicial
+        fig = mfig.Figure(figsize=(15, 2), dpi=dpi)
+        canvas = FigureCanvasAgg(fig)
+        fig.patch.set_alpha(0)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_axis_off()
+        ax.patch.set_alpha(0)
+        
+        txt = ax.text(0, 0.5, s, ha="left", va="center",
+                      color=fg, fontsize=fontsize, usetex=False)
+        
+        canvas.draw()
+        renderer = canvas.get_renderer()
+        bbox = txt.get_window_extent(renderer=renderer)
+        
+        # Holgura para evitar cortes (especialmente a la izquierda)
+        pad = 12
+        w = int(bbox.width) + pad * 2
+        h = int(bbox.height) + pad * 2
+        w = max(w, 10)
+        h = max(h, 10)
+
+        # Re-renderizado con el tamaño ajustado
+        fig2 = mfig.Figure(figsize=(w / dpi, h / dpi), dpi=dpi)
+        FigureCanvasAgg(fig2)
+        fig2.patch.set_alpha(0)
+        ax2 = fig2.add_axes([0, 0, 1, 1])
+        ax2.set_axis_off()
+        ax2.patch.set_alpha(0)
+        # Dibujamos centrado en la nueva figura
+        ax2.text(0.5, 0.5, s, ha="center", va="center",
+                 color=fg, fontsize=fontsize, usetex=False)
+        
+        buf = io.BytesIO()
+        fig2.savefig(buf, format="png", dpi=dpi, transparent=True, pad_inches=0)
+        buf.seek(0)
+        return Image.open(buf).convert("RGBA")
+    except Exception as exc:
+        print(f"[mathtext] {exc}  src={s}")
+        return None
+
+
+# ── Render: matriz como imagen PIL ───────────────────────────────────────────
+
+def _render_matrix(rows: list, fg: str, fontsize: float, dpi: int) -> Image.Image:
+    """
+    Renderiza una matriz como imagen PIL.
+    """
+    # Cada celda de la matriz es MATH puro (sin $ en el lu_solver)
+    cell_imgs: list[list[Image.Image]] = []
+    max_w = max_h = 0
+    for row in rows:
+        row_imgs = []
+        for cell in row:
+            # Asegurar modo math para la celda
+            cell_math = cell.strip()
+            if not cell_math.startswith("$"):
+                cell_math = f"${cell_math}$"
+            # Limpieza básica de NaN (\_) -> \cdot
+            cell_math = cell_math.replace(r"\mathrm{\_}", r"\cdot").replace(r"\text{\_}", r"\cdot").replace(r"\_", r"\cdot")
+            
+            img = _render_mathtext(cell_math, fg, fontsize * 0.95, dpi)
+            if img is None:
+                img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+            row_imgs.append(img)
+            max_w = max(max_w, img.width)
+            max_h = max(max_h, img.height)
+        cell_imgs.append(row_imgs)
+
+    n_rows = len(rows)
+    # Encontrar el número máximo de columnas
+    n_cols = max(len(r) for r in cell_imgs) if cell_imgs else 0
+    
+    pad_x, pad_y = 10, 8
+    cell_w = max_w + pad_x * 2
+    cell_h = max_h + pad_y * 2
+    grid_w = n_cols * cell_w
+    grid_h = n_rows * cell_h
+
+    # Dibujar corchetes - usando líneas simples de PIL
+    bracket_w = 14
+    total_w = grid_w + bracket_w * 2
+    out = Image.new("RGBA", (total_w, grid_h), (0, 0, 0, 0))
+    
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(out)
+    
+    # Corchete izquierdo [
+    draw.line([(bracket_w-2, 2), (4, 2), (4, grid_h-3), (bracket_w-2, grid_h-3)], fill=fg, width=2)
+    # Corchete derecho ]
+    draw.line([(total_w-bracket_w+2, 2), (total_w-4, 2), (total_w-4, grid_h-3), (total_w-bracket_w+2, grid_h-3)], fill=fg, width=2)
+
+    # Pegar celdas
+    for i, row_imgs in enumerate(cell_imgs):
+        for j, img in enumerate(row_imgs):
+            x = bracket_w + j * cell_w + (cell_w - img.width) // 2
+            y = i * cell_h + (cell_h - img.height) // 2
+            out.paste(img, (x, y), img)
+
+    return out
+
+
+# ── Caché para no re-renderizar ──────────────────────────────────────────────
+
+_IMAGE_CACHE: dict = {}
+
+def latex_to_image(
+    latex: str,
+    fg: str = TXT,
+    fontsize: float = 12,
+    dpi: int = 150,
+    max_width_px: int = 860,
+) -> ctk.CTkImage | None:
+    """Renderiza LaTeX (incluyendo bmatrix) como CTkImage."""
+    # NOTA: NO sanitizamos el string completo aquí para evitar que los 
+    # $ residuales arruinen el spliteo de matrices.
+    
+    cache_key = (latex, fg, fontsize, dpi)
+    if cache_key in _IMAGE_CACHE:
+        return _IMAGE_CACHE[cache_key]
+
+    try:
+        segs = _split_segments(latex)
+        
+        part_imgs: list[Image.Image] = []
+        for kind, data in segs:
+            if kind == "text":
+                # Sanitizamos el texto para convertir \text{} en $ math $
+                sanitized_text = _sanitize_latex(data)
+                img = _render_mathtext(sanitized_text, fg, fontsize, dpi)
+            else:
+                # Renderizado de matriz
+                img = _render_matrix(data, fg, fontsize, dpi)
+            if img:
+                part_imgs.append(img)
+
+        if not part_imgs:
+            # Reintentar con el original sanitizado si todo falló
+            img = _render_mathtext(_sanitize_latex(latex), fg, fontsize, dpi)
+            if not img: return None
+            part_imgs = [img]
+
+        gap = 8
+        total_w = sum(i.width for i in part_imgs) + gap * (max(0, len(part_imgs) - 1))
+        max_h = max(i.height for i in part_imgs)
+        
+        combined = Image.new("RGBA", (total_w, max_h), (0, 0, 0, 0))
+        x_offset = 0
+        for img in part_imgs:
+            y_offset = (max_h - img.height) // 2
+            combined.paste(img, (x_offset, y_offset), img)
+            x_offset += img.width + gap
+
+        # Escalar si es muy ancho
+        final_img = combined
+        if combined.width > max_width_px:
+            ratio = max_width_px / combined.width
+            final_img = combined.resize((max_width_px, int(combined.height * ratio)), Image.LANCZOS)
+
+        ctk_img = ctk.CTkImage(
+            light_image=final_img,
+            dark_image=final_img,
+            size=(final_img.width, final_img.height),
+        )
+        _IMAGE_CACHE[cache_key] = ctk_img
+        return ctk_img
+
+    except Exception as exc:
+        print(f"[latex_to_image] Error: {exc}\n  LaTeX: {latex}")
+        return None
+
+
+
+
+
+# ─────────────────────────── Ventana principal ────────────────────────────────
+
+class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Resolución de SEL — Descomposición LU")
-        self.resize(1200, 820)
 
-        self.view = QWebEngineView()
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
 
-        # Configurar QWebChannel
-        self.channel = QWebChannel()
-        self.bridge = Bridge()
-        self.channel.registerObject("bridge", self.bridge)
-        self.view.page().setWebChannel(self.channel)
+        self.title("Resolución de SEL — Descomposición LU")
+        self.geometry("1280x820")
+        self.minsize(900, 600)
+        self.configure(fg_color=BG)
 
-        # Inyectar qwebchannel.js en el HTML
-        qwc_js = _load_qwc_js()
-        html = _HTML.replace("%%QWEBCHANNEL%%", qwc_js)
-        self.view.setHtml(html, QUrl("about:blank"))
+        self.current_n = 4
+        self._entry_cells: dict = {}   # (i, j) o (i, 'b') → CTkEntry
+        self._solving = False
 
-        self.setCentralWidget(self.view)
-        self.show()
+        self._build_ui()
+
+    # ─────────────────────── Construcción de la UI ────────────────────────────
+
+    def _build_ui(self):
+        # ── Header ──────────────────────────────────────────────────────────
+        hdr = ctk.CTkFrame(self, fg_color="#0d0f2b", corner_radius=0)
+        hdr.pack(fill="x", side="top")
+
+        icon = ctk.CTkLabel(
+            hdr, text="Σ", width=52, height=52,
+            font=ctk.CTkFont(size=26, weight="bold"),
+            fg_color=P1, corner_radius=14,
+            text_color="white",
+        )
+        icon.pack(side="left", padx=(24, 14), pady=14)
+
+        hdr_text = ctk.CTkFrame(hdr, fg_color="transparent")
+        hdr_text.pack(side="left", pady=14)
+
+        ctk.CTkLabel(
+            hdr_text, text="Resolución de SEL — Descomposición LU",
+            font=ctk.CTkFont(family="Arial", size=18, weight="bold"),
+            text_color=P1,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            hdr_text,
+            text="Método de Doolittle con pivoteo parcial · Paso a paso con LaTeX",
+            font=ctk.CTkFont(size=11),
+            text_color=MUTED,
+        ).pack(anchor="w")
+
+        # ── Cuerpo principal (izquierda + derecha) ───────────────────────────
+        body = ctk.CTkFrame(self, fg_color=BG)
+        body.pack(fill="both", expand=True, padx=0, pady=0)
+        body.columnconfigure(0, weight=0, minsize=400)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        # Panel izquierdo (entrada)
+        left = ctk.CTkFrame(body, fg_color=SURFACE, corner_radius=0)
+        left.grid(row=0, column=0, sticky="nsew")
+
+        # Panel derecho (resultados)
+        self.results_scroll = ctk.CTkScrollableFrame(
+            body, fg_color=BG,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=P1,
+        )
+        self.results_scroll.grid(row=0, column=1, sticky="nsew")
+        self.results_scroll.columnconfigure(0, weight=1)
+
+        self._build_left(left)
+        self._build_placeholder()
+
+    def _build_left(self, parent):
+        parent.columnconfigure(0, weight=1)
+
+        # Título del panel
+        ctk.CTkLabel(
+            parent,
+            text="Sistema de ecuaciones",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=P2,
+        ).grid(row=0, column=0, sticky="w", padx=20, pady=(20, 6))
+
+        # ── Selector de tamaño ───────────────────────────────────────────────
+        size_row = ctk.CTkFrame(parent, fg_color="transparent")
+        size_row.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
+
+        ctk.CTkLabel(
+            size_row, text="Tamaño:", font=ctk.CTkFont(size=11),
+            text_color=MUTED,
+        ).pack(side="left", padx=(0, 8))
+
+        self._size_buttons = {}
+        for n in range(2, 9):
+            btn = ctk.CTkButton(
+                size_row,
+                text=f"{n}×{n}",
+                width=46, height=32,
+                corner_radius=8,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color=P1 if n == self.current_n else "transparent",
+                border_color=BORDER,
+                border_width=1,
+                hover_color="#5a4ee0",
+                text_color="white",
+                command=lambda _n=n: self._select_size(_n),
+            )
+            btn.pack(side="left", padx=2)
+            self._size_buttons[n] = btn
+
+        # ── Área de la matriz ────────────────────────────────────────────────
+        self.matrix_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.matrix_frame.grid(row=2, column=0, padx=20, pady=(0, 8), sticky="w")
+
+        # Error de entrada
+        self.input_error_var = ctk.StringVar(value="")
+        self._err_label = ctk.CTkLabel(
+            parent,
+            textvariable=self.input_error_var,
+            font=ctk.CTkFont(size=11),
+            text_color=ERR,
+            wraplength=340,
+        )
+        self._err_label.grid(row=3, column=0, sticky="w", padx=20, pady=(0, 4))
+
+        # ── Botones ───────────────────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_frame.grid(row=4, column=0, sticky="w", padx=20, pady=(4, 20))
+
+        self._solve_btn = ctk.CTkButton(
+            btn_frame,
+            text="Resolver  →",
+            width=120, height=38,
+            corner_radius=10,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=P1,
+            hover_color="#5a4ee0",
+            command=self._on_solve,
+        )
+        self._solve_btn.pack(side="left", padx=(0, 8))
+
+        for label, cmd in [
+            ("Copiar LaTeX", self._on_copy_latex),
+            ("Limpiar",      self._on_clear),
+            ("Ejemplo 4×4",  self._on_example),
+        ]:
+            ctk.CTkButton(
+                btn_frame,
+                text=label,
+                width=110, height=38,
+                corner_radius=10,
+                font=ctk.CTkFont(size=11),
+                fg_color="transparent",
+                border_color=BORDER,
+                border_width=1,
+                hover_color=SURFACE2,
+                text_color=TXT,
+                command=cmd,
+            ).pack(side="left", padx=(0, 6))
+
+        # Generar grid inicial
+        self._generate_grid(self.current_n)
+
+    def _build_placeholder(self):
+        """Mensaje inicial en el panel de resultados."""
+        self._clear_results()
+        ph = ctk.CTkLabel(
+            self.results_scroll,
+            text="Introduce el sistema y pulsa\n«Resolver →»",
+            font=ctk.CTkFont(size=14),
+            text_color=MUTED,
+        )
+        ph.grid(row=0, column=0, padx=40, pady=80)
+
+    # ─────────────────────── Grid de entrada ─────────────────────────────────
+
+    def _generate_grid(self, n: int):
+        for w in self.matrix_frame.winfo_children():
+            w.destroy()
+        self._entry_cells.clear()
+
+        # Etiquetas de columna
+        for j in range(n):
+            ctk.CTkLabel(
+                self.matrix_frame,
+                text=f"x{j+1}",
+                font=ctk.CTkFont(size=9, weight="bold"),
+                text_color=MUTED, width=58,
+            ).grid(row=0, column=j * 2, padx=2)
+        # Separador de etiqueta
+        ctk.CTkLabel(self.matrix_frame, text="", width=8).grid(row=0, column=n * 2 - 1)
+        ctk.CTkLabel(
+            self.matrix_frame,
+            text="b",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=P2, width=58,
+        ).grid(row=0, column=n * 2 + 1, padx=2)
+
+        # Filas de entrada
+        for i in range(n):
+            for j in range(n):
+                ent = ctk.CTkEntry(
+                    self.matrix_frame,
+                    width=58, height=40,
+                    corner_radius=8,
+                    border_color=BORDER,
+                    fg_color="#0a0c20",
+                    text_color=TXT,
+                    font=ctk.CTkFont(size=12),
+                    justify="center",
+                )
+                ent.grid(row=i + 1, column=j * 2, padx=2, pady=2)
+                ent.bind("<Return>",
+                         lambda e, _i=i, _j=j: self._next_focus(_i, _j))
+                self._entry_cells[(i, j)] = ent
+
+                # Línea separadora vertical (solo después de la última col A)
+                if j == n - 1:
+                    sep = ctk.CTkFrame(
+                        self.matrix_frame,
+                        width=2, height=40,
+                        fg_color="#1e2245",
+                    )
+                    sep.grid(row=i + 1, column=n * 2 - 1, padx=4)
+
+            # Entrada b
+            b_ent = ctk.CTkEntry(
+                self.matrix_frame,
+                width=58, height=40,
+                corner_radius=8,
+                border_color="#003344",
+                fg_color="#020e15",
+                text_color=P2,
+                font=ctk.CTkFont(size=12),
+                justify="center",
+            )
+            b_ent.grid(row=i + 1, column=n * 2 + 1, padx=2, pady=2)
+            b_ent.bind("<Return>",
+                       lambda e, _i=i: self._next_focus(_i, "b"))
+            self._entry_cells[(i, "b")] = b_ent
+
+    def _next_focus(self, i: int, j):
+        """Navega al siguiente campo con Enter."""
+        n = self.current_n
+        if j == "b":
+            if i < n - 1:
+                self._entry_cells.get((i + 1, 0), None)
+            else:
+                self._on_solve()
+                return
+            nxt = self._entry_cells.get((i + 1, 0))
+        elif isinstance(j, int) and j < n - 1:
+            nxt = self._entry_cells.get((i, j + 1))
+        else:
+            nxt = self._entry_cells.get((i, "b"))
+
+        if nxt:
+            nxt.focus_set()
+            nxt.select_range(0, "end")
+
+    # ─────────────────────── Acciones de botones ─────────────────────────────
+
+    def _select_size(self, n: int):
+        self.current_n = n
+        for _n, btn in self._size_buttons.items():
+            btn.configure(fg_color=P1 if _n == n else "transparent")
+        self._generate_grid(n)
+        self._reset_results()
+
+    def _read_matrix(self):
+        """Lee y valida el grid. Devuelve (A, b) o None si hay error."""
+        n = self.current_n
+        A, b = [], []
+        for i in range(n):
+            row = []
+            for j in range(n):
+                raw = self._entry_cells[(i, j)].get().strip()
+                try:
+                    row.append(float(raw))
+                except ValueError:
+                    return None
+            A.append(row)
+            try:
+                b.append(float(self._entry_cells[(i, "b")].get().strip()))
+            except ValueError:
+                return None
+        return A, b
+
+    def _on_clear(self):
+        for ent in self._entry_cells.values():
+            ent.delete(0, "end")
+        self._reset_results()
+
+    def _on_example(self):
+        n4A = [[2, -1, 0, 3], [4, 1, -1, 2], [-2, 3, 2, 0], [0, 2, -1, 1]]
+        n4b = [7, 9, 3, 2]
+        if self.current_n != 4:
+            self._select_size(4)
+        for i in range(4):
+            for j in range(4):
+                e = self._entry_cells[(i, j)]
+                e.delete(0, "end")
+                e.insert(0, str(n4A[i][j]))
+            eb = self._entry_cells[(i, "b")]
+            eb.delete(0, "end")
+            eb.insert(0, str(n4b[i]))
+
+    def _on_copy_latex(self):
+        n = self.current_n
+        A_rows, b_rows = [], []
+        for i in range(n):
+            row = [self._entry_cells[(i, j)].get() or "0" for j in range(n)]
+            A_rows.append(" & ".join(row))
+            b_rows.append(self._entry_cells[(i, "b")].get() or "0")
+
+        A_lat = "\\begin{pmatrix}\n" + " \\\\\n".join(A_rows) + "\n\\end{pmatrix}"
+        b_lat = "\\begin{pmatrix}\n" + " \\\\\n".join(b_rows) + "\n\\end{pmatrix}"
+        latex = f"% Modo Matricial\nA = {A_lat}\n\nb = {b_lat}"
+
+        self.clipboard_clear()
+        self.clipboard_append(latex)
+        self._show_toast("¡LaTeX copiado al portapapeles!")
+
+    def _on_solve(self):
+        if self._solving:
+            return
+        self.input_error_var.set("")
+        data = self._read_matrix()
+        if data is None:
+            self.input_error_var.set("⚠ Completa todas las celdas con valores numéricos.")
+            return
+
+        A, b = data
+        self._solving = True
+        self._solve_btn.configure(state="disabled", text="Calculando…")
+        self._show_loader()
+
+        def run():
+            try:
+                result = lu_solver.solve(A, b)
+            except Exception as exc:
+                result = {"error": str(exc)}
+            self.after(0, lambda: self._on_result(result))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    # ─────────────────────── Renderizado de resultados ───────────────────────
+
+    def _clear_results(self):
+        for w in self.results_scroll.winfo_children():
+            w.destroy()
+
+    def _reset_results(self):
+        self._clear_results()
+        self._build_placeholder()
+
+    def _show_loader(self):
+        self._clear_results()
+        ctk.CTkLabel(
+            self.results_scroll,
+            text="⏳  Calculando…",
+            font=ctk.CTkFont(size=14),
+            text_color=MUTED,
+        ).grid(row=0, column=0, padx=40, pady=80)
+
+    def _on_result(self, result: dict):
+        self._solving = False
+        self._solve_btn.configure(state="normal", text="Resolver  →")
+
+        if "error" in result:
+            self._clear_results()
+            ctk.CTkLabel(
+                self.results_scroll,
+                text=f"Error: {result['error']}",
+                font=ctk.CTkFont(size=12),
+                text_color=ERR,
+                wraplength=600,
+            ).grid(row=0, column=0, padx=20, pady=20)
+            return
+
+        self._render_results(result)
+
+    def _render_results(self, result: dict):
+        self._clear_results()
+        row_idx = 0
+
+        # ── Banner de solución ────────────────────────────────────────────────
+        if "x_latex" in result:
+            banner = ctk.CTkFrame(
+                self.results_scroll,
+                fg_color="#0a1f12",
+                corner_radius=12,
+                border_color="#1a4a28",
+                border_width=1,
+            )
+            banner.grid(row=row_idx, column=0, sticky="ew",
+                        padx=16, pady=(16, 8))
+            banner.columnconfigure(0, weight=1)
+            row_idx += 1
+
+            ctk.CTkLabel(
+                banner,
+                text="✓  SOLUCIÓN ENCONTRADA",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=OK,
+            ).grid(row=0, column=0, pady=(14, 4))
+
+            img = latex_to_image(
+                f"x = {result['x_latex']}",
+                fg=TXT, fontsize=13,
+            )
+            if img:
+                ctk.CTkLabel(banner, image=img, text="").grid(
+                    row=1, column=0, pady=(4, 14))
+
+        # ── Tarjetas de pasos ─────────────────────────────────────────────────
+        for step in result.get("steps", []):
+            step_type = step.get("type", "system")
+            bg_color, accent_color = STEP_COLORS.get(
+                step_type, (SURFACE2, P2))
+
+            card = ctk.CTkFrame(
+                self.results_scroll,
+                fg_color=bg_color,
+                corner_radius=10,
+                border_color=accent_color,
+                border_width=1,
+            )
+            card.grid(row=row_idx, column=0, sticky="ew",
+                      padx=16, pady=4)
+            card.columnconfigure(0, weight=1)
+            row_idx += 1
+
+            # Título (texto plano con posible $ … $ inline)
+            title_raw = re.sub(r"\$[^$]*\$", "", step.get("title", "")).strip()
+            if not title_raw:
+                title_raw = step.get("title", "")
+            ctk.CTkLabel(
+                card,
+                text=title_raw,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=accent_color,
+                anchor="w",
+                wraplength=700,
+            ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 4))
+
+            # LaTeX principal
+            if step.get("latex"):
+                img = latex_to_image(step["latex"], fontsize=10)
+                if img:
+                    ctk.CTkLabel(card, image=img, text="").grid(
+                        row=1, column=0, padx=14, pady=(0, 8))
+
+            # Matrices L, U, P (cuando show_matrices)
+            if step.get("show_matrices"):
+                mat_row_frame = ctk.CTkFrame(card, fg_color="transparent")
+                mat_row_frame.grid(row=2, column=0, pady=(0, 10))
+                col = 0
+                for key, label in [
+                    ("L_latex", "L"), ("U_latex", "U"), ("P_latex", "P")
+                ]:
+                    if step.get(key):
+                        blk = ctk.CTkFrame(
+                            mat_row_frame, fg_color="transparent")
+                        blk.grid(row=0, column=col, padx=12)
+                        col += 1
+                        ctk.CTkLabel(
+                            blk,
+                            text=label,
+                            font=ctk.CTkFont(size=9, weight="bold"),
+                            text_color=MUTED,
+                        ).pack()
+                        img = latex_to_image(
+                            step[key], fontsize=9, max_width_px=260)
+                        if img:
+                            ctk.CTkLabel(blk, image=img, text="").pack()
+
+        # Nota de fin
+        ctk.CTkLabel(
+            self.results_scroll,
+            text="— Fin del proceso —",
+            font=ctk.CTkFont(size=10),
+            text_color=MUTED,
+        ).grid(row=row_idx, column=0, pady=20)
+
+    # ─────────────────────── Toast ────────────────────────────────────────────
+
+    def _show_toast(self, msg: str):
+        toast = ctk.CTkLabel(
+            self,
+            text=msg,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#1a1a3a",
+            corner_radius=10,
+            text_color=TXT,
+            padx=20, pady=10,
+        )
+        toast.place(relx=0.5, rely=0.95, anchor="center")
+        self.after(2000, toast.destroy)
 
 
-# ─────────────────────────────── Entry point ─────────────────────────────────
+# ─────────────────────────── Entry point ─────────────────────────────────────
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    window = MainWindow()
-    sys.exit(app.exec())
+    app = App()
+    app.mainloop()
