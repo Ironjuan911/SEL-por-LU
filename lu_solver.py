@@ -100,11 +100,9 @@ def solve(A_input, b_input):
 
     for i in range(n):
         # — Pivoteo parcial para la fila i —
-        # Debemos encontrar el mejor pivote para U[i,i] considerando los elementos restantes de A
-        # pero tomando en cuenta las eliminaciones ya hechas.
-        # En el método directo con pivoteo, es más sencillo pivotar la matriz original A
-        # o llevar un registro. Para mantener la claridad de "ecuaciones", simplemente
-        # buscaremos el valor máximo en la columna i de la matriz PA (considerando lo ya calculado).
+        # Identificamos el pivote máximo en magnitud dentro de la columna i, a partir de la fila i actual,
+        # buscando estabilidad numérica (evitar divisiones por números cercanos a cero).
+        # max_idx nos da inicialmente el offset relativo de numpy, por lo que sumamos `i` para obtener índice absoluto.
         
         max_idx = i + np.argmax(np.abs(PA[i:, i]))
         if max_idx != i:
@@ -122,7 +120,8 @@ def solve(A_input, b_input):
                 "P_latex": mat_to_latex(P),
             })
 
-        # Cálculo de la fila i de U
+        # Cálculo de la fila i de la parte triangular superior U (Doolittle: diagonal de L es de 1)
+        # Cada elemento se deduce de descontar el producto interno acumulado de la matriz base PA
         for j in range(i, n):
             suma = sum(L[i, k] * U[k, j] for k in range(i))
             U[i, j] = PA[i, j] - suma
@@ -149,7 +148,8 @@ def solve(A_input, b_input):
             })
             return {"n": n, "steps": steps, "L_latex": mat_to_latex(L), "U_latex": mat_to_latex(U), "P_latex": mat_to_latex(P)}
 
-        # Cálculo de la columna i de L
+        # Cálculo de la columna i de la triangular inferior L
+        # Para todos los elementos de debajo del pivote U[i,i]
         for j in range(i + 1, n):
             suma = sum(L[j, k] * U[k, i] for k in range(i))
             L[j, i] = (PA[j, i] - suma) / U[i, i]
@@ -192,6 +192,7 @@ def solve(A_input, b_input):
     })
 
     for i in range(n):
+        # Despejamos el elemento `i` de la matriz y calculamos el producto escalar solo del fragmento inferior ya conocido.
         dot = float(np.dot(L[i, :i], z[:i]))
         z[i] = Pb[i] - dot
 
@@ -226,6 +227,7 @@ def solve(A_input, b_input):
     })
 
     for i in range(n - 1, -1, -1):
+        # Despeje inverso (hacia atrás). x = (z - U_resto * x_resto) / U_diagonal
         dot = float(np.dot(U[i, i + 1:], x[i + 1:]))
         rhs = z[i] - dot
         x[i] = rhs / U[i, i]

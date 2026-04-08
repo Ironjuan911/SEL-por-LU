@@ -55,14 +55,14 @@ def _sanitize_latex(s: str) -> str:
     Convierte LaTeX con \text{...} a formato compatible con matplotlib (inline math).
     Ejemplo: "\text{Hola } x=1" -> "Hola $x=1$"
     """
-    # 1. Quitar símbolos de $ residuales
+    # 1. Quitar símbolos de $ residuales (se envuelven más adelante de forma segura)
     s = s.replace("$", "")
     
-    # 2. Reemplazos de conveniencia
+    # 2. Reemplazos de conveniencia para saltos y reemplazo del "_" de NaN por punto central (\cdot)
     s = s.replace(r"\qquad", r" \quad ").replace(r"\quad", r" \; ")
     s = s.replace(r"\mathrm{\_}", r"\cdot").replace(r"\text{\_}", r"\cdot").replace(r"\_", r"\cdot")
 
-    # 3. Procesar \text{...}
+    # 3. Procesar \text{...} separando en partes usando una regex iterativa
     parts = []
     last_pos = 0
     # Buscar \text{...} o \mathrm{...} (tratamos ambos como texto plano para mathtext si tienen espacios)
@@ -107,6 +107,7 @@ def _split_segments(latex: str) -> list:
       ('text',   str)        → fragmento de mathtext puro
       ('matrix', list[list]) → filas/columnas de una bmatrix
     """
+    # Identifica matriz separándola de todo el texto que está antes y después.
     segs = []
     last = 0
     for m in _BMATRIX_RE.finditer(latex):
@@ -160,8 +161,9 @@ def _render_mathtext(s: str, fg: str, fontsize: float, dpi: int) -> Image.Image 
         renderer = canvas.get_renderer()
         bbox = txt.get_window_extent(renderer=renderer)
         
-        # Holgura para evitar cortes (especialmente a la izquierda)
-        pad = 12
+        # Holgura para evitar cortes (escalada según DPI)
+        scale = dpi / 150.0
+        pad = int(12 * scale)
         w = int(bbox.width) + pad * 2
         h = int(bbox.height) + pad * 2
         w = max(w, 10)
@@ -193,7 +195,7 @@ def _render_matrix(rows: list, fg: str, fontsize: float, dpi: int) -> Image.Imag
     """
     Renderiza una matriz como imagen PIL.
     """
-    # Cada celda de la matriz es MATH puro (sin $ en el lu_solver)
+    # Cada celda de la matriz es MATH puro; se generan imágenes individuales por celda.
     cell_imgs: list[list[Image.Image]] = []
     max_w = max_h = 0
     for row in rows:
@@ -218,24 +220,26 @@ def _render_matrix(rows: list, fg: str, fontsize: float, dpi: int) -> Image.Imag
     # Encontrar el número máximo de columnas
     n_cols = max(len(r) for r in cell_imgs) if cell_imgs else 0
     
-    pad_x, pad_y = 10, 8
+    scale = dpi / 150.0
+    pad_x, pad_y = int(10 * scale), int(8 * scale)
     cell_w = max_w + pad_x * 2
     cell_h = max_h + pad_y * 2
     grid_w = n_cols * cell_w
     grid_h = n_rows * cell_h
 
     # Dibujar corchetes - usando líneas simples de PIL
-    bracket_w = 14
+    bracket_w = int(14 * scale)
     total_w = grid_w + bracket_w * 2
     out = Image.new("RGBA", (total_w, grid_h), (0, 0, 0, 0))
     
     from PIL import ImageDraw
     draw = ImageDraw.Draw(out)
     
+    line_w = max(1, int(2 * scale))
     # Corchete izquierdo [
-    draw.line([(bracket_w-2, 2), (4, 2), (4, grid_h-3), (bracket_w-2, grid_h-3)], fill=fg, width=2)
+    draw.line([(bracket_w - int(2*scale), int(2*scale)), (int(4*scale), int(2*scale)), (int(4*scale), grid_h - int(3*scale)), (bracket_w - int(2*scale), grid_h - int(3*scale))], fill=fg, width=line_w)
     # Corchete derecho ]
-    draw.line([(total_w-bracket_w+2, 2), (total_w-4, 2), (total_w-4, grid_h-3), (total_w-bracket_w+2, grid_h-3)], fill=fg, width=2)
+    draw.line([(total_w - bracket_w + int(2*scale), int(2*scale)), (total_w - int(4*scale), int(2*scale)), (total_w - int(4*scale), grid_h - int(3*scale)), (total_w - bracket_w + int(2*scale), grid_h - int(3*scale))], fill=fg, width=line_w)
 
     # Pegar celdas
     for i, row_imgs in enumerate(cell_imgs):
@@ -248,15 +252,15 @@ def _render_matrix(rows: list, fg: str, fontsize: float, dpi: int) -> Image.Imag
 
 
 # ── Caché para no re-renderizar ──────────────────────────────────────────────
-
+# Evitamos cálculos repetitivos (renderizar matplotlib a bytes a PIL y luego a CTkImage es costoso)
 _IMAGE_CACHE: dict = {}
 
 def latex_to_image(
     latex: str,
     fg: str = TXT,
     fontsize: float = 12,
-    dpi: int = 150,
-    max_width_px: int = 860,
+    dpi: int = 300,
+    max_width_px: int = 1720,
 ) -> ctk.CTkImage | None:
     """Renderiza LaTeX (incluyendo bmatrix) como CTkImage."""
     # NOTA: NO sanitizamos el string completo aquí para evitar que los 
@@ -287,7 +291,8 @@ def latex_to_image(
             if not img: return None
             part_imgs = [img]
 
-        gap = 8
+        scale = dpi / 150.0
+        gap = int(8 * scale)
         total_w = sum(i.width for i in part_imgs) + gap * (max(0, len(part_imgs) - 1))
         max_h = max(i.height for i in part_imgs)
         
@@ -307,7 +312,7 @@ def latex_to_image(
         ctk_img = ctk.CTkImage(
             light_image=final_img,
             dark_image=final_img,
-            size=(final_img.width, final_img.height),
+            size=(final_img.width / scale, final_img.height / scale),
         )
         _IMAGE_CACHE[cache_key] = ctk_img
         return ctk_img
@@ -794,7 +799,7 @@ class App(ctk.CTk):
                             text_color=MUTED,
                         ).pack()
                         img = latex_to_image(
-                            step[key], fontsize=9, max_width_px=260)
+                            step[key], fontsize=9, max_width_px=520)
                         if img:
                             ctk.CTkLabel(blk, image=img, text="").pack()
 
