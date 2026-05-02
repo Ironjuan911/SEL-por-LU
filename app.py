@@ -375,6 +375,21 @@ class App(ctk.CTk):
             text_color=MUTED,
         ).pack(anchor="w")
 
+        # Botón de Manual en el header
+        self.manual_btn = ctk.CTkButton(
+            hdr, text="Manual de Usuario",
+            width=140, height=32,
+            corner_radius=8,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="transparent",
+            border_color=BORDER,
+            border_width=1,
+            hover_color=SURFACE2,
+            text_color=P2,
+            command=self._on_open_manual
+        )
+        self.manual_btn.pack(side="right", padx=24, pady=16)
+
         # ── Cuerpo principal (izquierda + derecha) ───────────────────────────
         body = ctk.CTkFrame(self, fg_color=BG)
         body.pack(fill="both", expand=True, padx=0, pady=0)
@@ -810,6 +825,160 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=10),
             text_color=MUTED,
         ).grid(row=row_idx, column=0, pady=20)
+    
+    def _on_open_manual(self):
+        """Abre la ventana del manual."""
+        ManualWindow(self)
+
+    def _show_toast(self, msg: str):
+        """Muestra una notificación temporal."""
+        toast = ctk.CTkLabel(
+            self,
+            text=msg,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#1a1a3a",
+            corner_radius=10,
+            text_color=TXT,
+            padx=20, pady=10,
+        )
+        toast.place(relx=0.5, rely=0.95, anchor="center")
+        self.after(2000, toast.destroy)
+
+
+# ─────────────────────────── Ventana del Manual ──────────────────────────────
+
+class ManualWindow(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Manual de Usuario — SEL por LU")
+        self.geometry("800x700")
+        self.minsize(600, 500)
+        self.configure(fg_color=BG)
+        self.after(200, self.lift) # Asegurar que esté al frente
+
+        # Contenedor principal
+        self.main_frame = ctk.CTkScrollableFrame(
+            self, fg_color=BG,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=P1,
+        )
+        self.main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        self.main_frame.columnconfigure(0, weight=1)
+
+        self._load_content()
+
+    def _load_content(self):
+        try:
+            with open("Manual_Usuario.md", "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            self._add_text("Error: No se pudo cargar el archivo Manual_Usuario.md", ERR, 14, "bold")
+            return
+
+        lines = content.split("\n")
+        in_code_block = False
+        code_lines = []
+        
+        for line in lines:
+            # Manejo de bloques de código
+            if line.strip().startswith("```"):
+                if in_code_block:
+                    # Cerrar bloque de código
+                    self._add_code_block("\n".join(code_lines))
+                    code_lines = []
+                    in_code_block = False
+                else:
+                    in_code_block = True
+                continue
+            
+            if in_code_block:
+                code_lines.append(line)
+                continue
+
+            stripped = line.strip()
+            if not stripped:
+                self._add_spacing(8)
+                continue
+            
+            if line.startswith("# "):
+                self._add_text(line[2:], P1, 24, "bold")
+                self._add_separator()
+            elif line.startswith("## "):
+                self._add_text(line[3:], P2, 18, "bold")
+            elif line.startswith("### "):
+                self._add_text(line[4:], OK, 14, "bold")
+            elif line.startswith("---"):
+                self._add_separator()
+            elif line.startswith("- ") or line.startswith("* "):
+                self._add_text(" • " + line[2:], TXT, 12)
+            elif re.match(r"^\d+\.", stripped):
+                self._add_text(" " + stripped, TXT, 12)
+            elif line.startswith("!["):
+                match = re.search(r"\((.*?)\)", line)
+                if match:
+                    self._add_image(match.group(1))
+            else:
+                self._add_text(line, TXT, 12)
+
+    def _add_text(self, text, color, size, weight="normal"):
+        # 1. Limpiar enlaces markdown: [texto](url) -> texto
+        text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
+        
+        # 2. Limpiar negritas/itálicas
+        text = text.replace("**", "").replace("__", "").replace("*", "").replace("_", "")
+        
+        # 3. Solo renderizar como LaTeX si la línea es puramente matemática (ej. $...$)
+        # o si contiene fragmentos pero queremos mantener el texto como base.
+        stripped = text.strip()
+        if stripped.startswith("$") and stripped.endswith("$"):
+            img = latex_to_image(text, fg=color, fontsize=size)
+            if img:
+                lbl = ctk.CTkLabel(self.main_frame, image=img, text="")
+                lbl.pack(anchor="w", pady=2)
+                return
+
+        # Para texto normal, evitamos latex_to_image para que no se pierdan espacios
+        text_display = text.replace("$", "")
+        lbl = ctk.CTkLabel(
+            self.main_frame, text=text_display, text_color=color,
+            font=ctk.CTkFont(size=size, weight=weight),
+            wraplength=740, justify="left"
+        )
+        lbl.pack(anchor="w", pady=2)
+
+    def _add_code_block(self, code):
+        frame = ctk.CTkFrame(self.main_frame, fg_color="#1e1e1e", corner_radius=6)
+        frame.pack(fill="x", padx=10, pady=5)
+        
+        lbl = ctk.CTkLabel(
+            frame, text=code, text_color="#d4d4d4",
+            font=ctk.CTkFont(family="Consolas", size=11),
+            justify="left", anchor="w", padx=10, pady=10
+        )
+        lbl.pack(fill="x")
+
+    def _add_image(self, path):
+        try:
+            img = Image.open(path)
+            # Escalar imagen para que quepa
+            w, h = img.size
+            max_w = 700
+            if w > max_w:
+                ratio = max_w / w
+                img = img.resize((max_w, int(h * ratio)), Image.LANCZOS)
+            
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(img.width, img.height))
+            lbl = ctk.CTkLabel(self.main_frame, image=ctk_img, text="")
+            lbl.pack(pady=10)
+        except Exception:
+            self._add_text(f"[Imagen no encontrada: {path}]", MUTED, 10)
+
+    def _add_separator(self):
+        sep = ctk.CTkFrame(self.main_frame, height=2, fg_color=BORDER)
+        sep.pack(fill="x", pady=10)
+
+    def _add_spacing(self, height):
+        ctk.CTkLabel(self.main_frame, text="", height=height).pack()
 
     # ─────────────────────── Toast ────────────────────────────────────────────
 

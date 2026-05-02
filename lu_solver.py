@@ -100,11 +100,15 @@ def solve(A_input, b_input):
 
     for i in range(n):
         # — Pivoteo parcial para la fila i —
-        # Identificamos el pivote máximo en magnitud dentro de la columna i, a partir de la fila i actual,
-        # buscando estabilidad numérica (evitar divisiones por números cercanos a cero).
-        # max_idx nos da inicialmente el offset relativo de numpy, por lo que sumamos `i` para obtener índice absoluto.
-        
-        max_idx = i + np.argmax(np.abs(PA[i:, i]))
+        # Calculamos los valores prospectivos de U para la columna i,
+        # descontando las operaciones de eliminación previas,
+        # para encontrar el pivote correcto (el de mayor magnitud).
+        prospective_U_col = np.zeros(n)
+        for j in range(i, n):
+            suma_p = sum(L[j, k] * U[k, i] for k in range(i))
+            prospective_U_col[j] = PA[j, i] - suma_p
+            
+        max_idx = i + np.argmax(np.abs(prospective_U_col[i:]))
         if max_idx != i:
             PA[[i, max_idx]] = PA[[max_idx, i]]
             P[[i, max_idx]] = P[[max_idx, i]]

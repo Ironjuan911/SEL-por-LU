@@ -53,17 +53,14 @@ Al abrir el programa, verás la ventana principal que presenta en la zona media 
 
 La aplicación está dividida en dos grandes componentes arquitectónicos: la interfaz gráfica o Frontend web incrustado (`app.py`), y el núcleo matemático de procesamiento o Backend (`lu_solver.py`).
 
-### 1. El Puente entre la Interfaz Gráfica (Frontend) y Python (`app.py`)
+### 1. Interfaz Nativa de Alto Rendimiento (`app.py`)
 
-Aunque el programa se distribuye en Python de escritorio, la interfaz moderna emplea **HTML, CSS y JavaScript** puro. Se ha implementado **PyQt6**, específicamente su visor embebido de alta velocidad de Chromium (`QWebEngineView`), para inyectar este HTML local.
+La aplicación emplea **CustomTkinter**, una extensión moderna que permite crear interfaces con un look & feel actual soportando temas oscuros y componentes premium.
 
-#### Comunicación Bidireccional (`QWebChannel`)
-
-Para que los inputs/botones de HTML y JavaScript envíen sus acciones y cálculos hacia Python, existe un "puente" invisible de comunicación instanciado sobre un WebChannel en red local:
-
-- El software crea una clase nativa de Python (`Bridge`) con funciones "expuestas" al navegador gracias al atributo decorador especial `@pyqtSlot`.
-- Cuando el usuario solicita "Resolver", JavaScript lee los cuadrantes HTML de la matriz, estructura estos datos a una sintaxis serializada compacta en formato genérico (`JSON`) y los inyecta al puente.
-- Python los recibe a través del método de recepción `solve`, decodifica el objeto a una lista de Python para delegarlo directamente a la función de resolución matemática y devuelve los datos por el mismo canal, en donde luego se insertan al árbol HTML mediante la librería **MathJax** para crear símbolos visuales agradables a la vista.
+#### Componentes Clave:
+- **Renderizado de LaTeX:** Utiliza **matplotlib** para generar imágenes de alta resolución a partir de código LaTeX, proyectándolas en la interfaz.
+- **Ventana de Manual:** Incluye un visor de Markdown integrado para consultar la documentación directamente desde la aplicación.
+- **Asincronía:** Los cálculos pesados se ejecutan en hilos (`threading`) para mantener la fluidez de la interfaz.
 
 ### 2. El Núcleo del Solver Computacional (`lu_solver.py`)
 
