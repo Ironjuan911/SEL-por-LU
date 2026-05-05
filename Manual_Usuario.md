@@ -86,4 +86,4 @@ Una vez obtenidas $L$ y $U$, el sistema se resuelve en dos fases:
 
 ---
 
-*Desarrollado para la cátedra de Análisis Numérico.*
+*Desarrollado por Juan José Arévalo - 192389.*

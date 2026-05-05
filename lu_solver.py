@@ -47,6 +47,22 @@ def vec_to_latex(v):
     return r"\begin{bmatrix}" + body + r"\end{bmatrix}"
 
 
+def vec_to_latex_row(v, var="x"):
+    """
+    Convierte un vector 1D a vector fila LaTeX con etiquetas de variable.
+    Ejemplo (n=3): (x_1, x_2, x_3)^T = (1, 2, 3)
+    Se muestra como pmatrix horizontal con encabezado de subíndices.
+    """
+    n = len(v)
+    subs  = " & ".join(f"{var}_{{{i+1}}}" for i in range(n))
+    vals  = " & ".join(fmt(x) for x in v)
+    return (
+        r"\begin{pmatrix}" + subs + r"\end{pmatrix}^\top"
+        r" = "
+        r"\begin{pmatrix}" + vals + r"\end{pmatrix}^\top"
+    )
+
+
 # ──────────────────────────── Algoritmo principal ───────────────────────────
 
 def solve(A_input, b_input):
@@ -257,7 +273,7 @@ def solve(A_input, b_input):
         "type": "solution",
         "phase": 3,
         "title": "Solución final $x$",
-        "latex": f"x = {vec_to_latex(x)}",
+        "latex": vec_to_latex_row(x),
         "x_values": x.tolist(),
     })
 
@@ -265,7 +281,7 @@ def solve(A_input, b_input):
         "n": n,
         "steps": steps,
         "x": x.tolist(),
-        "x_latex": vec_to_latex(x),
+        "x_latex": vec_to_latex_row(x),
         "L_latex": mat_to_latex(L),
         "U_latex": mat_to_latex(U),
         "P_latex": mat_to_latex(P),
